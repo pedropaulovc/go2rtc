@@ -13,6 +13,7 @@ import (
 	"github.com/AlexxIT/go2rtc/internal/dvrip"
 	"github.com/AlexxIT/go2rtc/internal/echo"
 	"github.com/AlexxIT/go2rtc/internal/eseecloud"
+	"github.com/AlexxIT/go2rtc/internal/ezviz"
 	"github.com/AlexxIT/go2rtc/internal/exec"
 	"github.com/AlexxIT/go2rtc/internal/expr"
 	"github.com/AlexxIT/go2rtc/internal/ffmpeg"
@@ -97,6 +98,7 @@ func main() {
 		{"doorbird", doorbird.Init},
 		{"dvrip", dvrip.Init},
 		{"eseecloud", eseecloud.Init},
+		{"ezviz", ezviz.Init},
 		{"flussonic", flussonic.Init},
 		{"gopro", gopro.Init},
 		{"isapi", isapi.Init},

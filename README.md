@@ -281,6 +281,7 @@ A summary table of all modules and features can be found [here](internal/README.
 - [`doorbird`](internal/doorbird/README.md) - [Doorbird](https://www.doorbird.com/) devices with two-way audio.
 - [`dvrip`](internal/dvrip/README.md) - DVR-IP NVR, NetSurveillance, Sofia protocol (XMeye SDK).
 - [`eseecloud`](internal/eseecloud/README.md) - Some NVR from [dvr163.com](http://help.dvr163.com/) and [eseecloud.com](http://www.eseecloud.com/).
+- [`ezviz`](internal/ezviz/README.md) - [EZVIZ](https://www.ezviz.com/) / [Hik-Connect](https://www.hik-connect.com/) (Hikvision) cloud cameras and NVRs via proprietary P2P, no port-forwarding. Also as `hikconnect:`.
 - [`gopro`](internal/gopro/README.md) - [GoPro](https://gopro.com/) cameras, connected via USB or Wi-Fi.
 - [`hass`](internal/hass/README.md) - Import cameras from [Home Assistant](https://www.home-assistant.io/) config files.
 - [`homekit`](internal/homekit/README.md) - Cameras with [Apple HomeKit](https://www.apple.com/home-app/accessories/) protocol.
