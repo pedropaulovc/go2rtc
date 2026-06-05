@@ -35,6 +35,14 @@
             border: 1px solid var(--border-color);
             border-radius: 6px;
         }
+
+        #ezviz-table tbody tr {
+            cursor: pointer;
+        }
+
+        #ezviz-table tbody tr:hover {
+            background: var(--bg-card);
+        }
     </style>
 </head>
 <body>
@@ -219,6 +227,7 @@
             <input type="text" name="host" placeholder="api host (default: api.hik-connect.com)">
             <button type="submit">discover</button>
         </form>
+        <small id="ezviz-hint" style="display: none; color: var(--text-secondary)">Click a row to fill the "Temporary stream" form above, then press add.</small>
         <table id="ezviz-table"></table>
     </div>
     <script>
@@ -234,6 +243,22 @@
             const r = await fetch(new URL('api/ezviz?' + query.toString(), location.href), {cache: 'no-cache'});
             if (!r.ok) { table.innerText = (await r.text()) || 'Unknown error'; return; }
             drawTable(table, await r.json());
+            document.getElementById('ezviz-hint').style.display = 'block';
+        });
+        // Click a discovered row to pre-fill the Temporary stream form with its URL.
+        document.getElementById('ezviz-table').addEventListener('click', ev => {
+            const row = ev.target.closest('tbody tr');
+            if (!row) return;
+            const cells = [...row.cells].map(c => c.innerText.trim());
+            const src = cells.find(t => t.includes('://'));
+            if (!src) return;
+            const name = (cells[0] || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+            const form = document.getElementById('stream-form');
+            form.elements['name'].value = name;
+            form.elements['src'].value = src;
+            document.getElementById('stream').nextElementSibling.style.display = 'grid';
+            form.scrollIntoView({block: 'center'});
+            form.elements['name'].focus();
         });
     </script>
 
