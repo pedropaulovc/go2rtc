@@ -43,12 +43,15 @@ func apiDiscover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	baseURL := host
-	if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
-		baseURL = "https://" + host
+	// Discovery accepts the host with or without a scheme; the REST client wants a
+	// full base URL while the per-stream source URL wants a bare host[:port].
+	scheme := "https"
+	if strings.HasPrefix(host, "http://") {
+		scheme = "http"
 	}
+	host = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://"), "/")
 
-	found, err := ezviz.Discover(baseURL, account, password)
+	found, err := ezviz.Discover(scheme+"://"+host, account, password)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

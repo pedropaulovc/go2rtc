@@ -102,20 +102,29 @@ func subtypeForStreamType(t int) string {
 }
 
 func (a *apiClient) getDevices() ([]discDevice, error) {
-	const path = "/v3/userdevices/v1/resources/pagelist" +
-		"?groupId=-1&limit=50&offset=0&filter=CONNECTION,STATUS"
+	const limit = 50
 
-	var out struct {
-		Meta        apiMeta      `json:"meta"`
-		DeviceInfos []discDevice `json:"deviceInfos"`
+	var all []discDevice
+	for offset := 0; ; offset += limit {
+		path := fmt.Sprintf("/v3/userdevices/v1/resources/pagelist"+
+			"?groupId=-1&limit=%d&offset=%d&filter=CONNECTION,STATUS", limit, offset)
+
+		var out struct {
+			Meta        apiMeta      `json:"meta"`
+			DeviceInfos []discDevice `json:"deviceInfos"`
+		}
+		if err := a.getJSON(path, &out); err != nil {
+			return nil, fmt.Errorf("ezviz: device list: %w", err)
+		}
+		if out.Meta.Code != 200 {
+			return nil, fmt.Errorf("ezviz: device list failed: %d %s", out.Meta.Code, out.Meta.Message)
+		}
+
+		all = append(all, out.DeviceInfos...)
+		if len(out.DeviceInfos) < limit {
+			return all, nil
+		}
 	}
-	if err := a.getJSON(path, &out); err != nil {
-		return nil, fmt.Errorf("ezviz: device list: %w", err)
-	}
-	if out.Meta.Code != 200 {
-		return nil, fmt.Errorf("ezviz: device list failed: %d %s", out.Meta.Code, out.Meta.Message)
-	}
-	return out.DeviceInfos, nil
 }
 
 func (a *apiClient) getCameras(serial string) ([]discCamera, error) {
