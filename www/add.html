@@ -211,6 +211,33 @@
     </script>
 
 
+    <button id="ezviz">EZVIZ / Hik-Connect</button>
+    <div>
+        <form id="ezviz-form">
+            <input type="email" name="account" placeholder="account (email)" required>
+            <input type="password" name="password" placeholder="password" required>
+            <input type="text" name="host" placeholder="api host (default: api.hik-connect.com)">
+            <button type="submit">discover</button>
+        </form>
+        <table id="ezviz-table"></table>
+    </div>
+    <script>
+        document.getElementById('ezviz').addEventListener('click', ev => {
+            const div = ev.target.nextElementSibling;
+            div.style.display = div.style.display === 'grid' ? 'none' : 'grid';
+        });
+        document.getElementById('ezviz-form').addEventListener('submit', async ev => {
+            ev.preventDefault();
+            const table = document.getElementById('ezviz-table');
+            table.innerText = 'loading...';
+            const query = new URLSearchParams(new FormData(ev.target));
+            const r = await fetch(new URL('api/ezviz?' + query.toString(), location.href), {cache: 'no-cache'});
+            if (!r.ok) { table.innerText = (await r.text()) || 'Unknown error'; return; }
+            drawTable(table, await r.json());
+        });
+    </script>
+
+
     <button id="devices">FFmpeg Devices (USB)</button>
     <div>
         <table id="devices-table"></table>
