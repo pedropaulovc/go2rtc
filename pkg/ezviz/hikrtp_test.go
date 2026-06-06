@@ -206,59 +206,6 @@ func TestHikRTPExtractor_ConsecutiveFUs(t *testing.T) {
 	}
 }
 
-func TestExtractPlaybackPayload_StripsHeader(t *testing.T) {
-	// 12B Hik-RTP header + MPEG-PS pack start (00 00 01 BA …).
-	ps := []byte{0x00, 0x00, 0x01, 0xba, 0x44, 0x00, 0x04, 0x00}
-	packet := append(make([]byte, 12), ps...)
-	binary.BigEndian.PutUint16(packet, 0x8050)
-
-	if out := extractPlaybackPayload(packet); !bytes.Equal(out, ps) {
-		t.Fatalf("got %x want %x", out, ps)
-	}
-}
-
-func TestExtractPlaybackPayload_DoesNotStripSubHeader(t *testing.T) {
-	// A pack-header byte at offset 12 must survive — the live path would treat
-	// 0x0d as a sub-header marker; playback must not.
-	ps := []byte{0x0d, 0x00, 0x00, 0x01, 0xe0, 0x10, 0x00}
-	packet := append(make([]byte, 12), ps...)
-	binary.BigEndian.PutUint16(packet, 0x8060)
-
-	if out := extractPlaybackPayload(packet); !bytes.Equal(out, ps) {
-		t.Fatalf("got %x want %x", out, ps)
-	}
-}
-
-func TestExtractPlaybackPayload_AllVideoTypes(t *testing.T) {
-	for _, typ := range []uint16{0x8050, 0x8060, 0x8051} {
-		packet := make([]byte, 12+4)
-		binary.BigEndian.PutUint16(packet, typ)
-		for i := 12; i < 16; i++ {
-			packet[i] = 0xab
-		}
-		want := []byte{0xab, 0xab, 0xab, 0xab}
-		if out := extractPlaybackPayload(packet); !bytes.Equal(out, want) {
-			t.Fatalf("type %#x: got %x want %x", typ, out, want)
-		}
-	}
-}
-
-func TestExtractPlaybackPayload_IgnoresControl(t *testing.T) {
-	ctrl := make([]byte, 64)
-	binary.BigEndian.PutUint16(ctrl, 0x807f)
-	if out := extractPlaybackPayload(ctrl); out != nil {
-		t.Fatalf("expected nil, got %x", out)
-	}
-}
-
-func TestExtractPlaybackPayload_IgnoresEmpty(t *testing.T) {
-	packet := make([]byte, 12)
-	binary.BigEndian.PutUint16(packet, 0x8050)
-	if out := extractPlaybackPayload(packet); out != nil {
-		t.Fatalf("expected nil, got %x", out)
-	}
-}
-
 // audioPacket builds a live audio Hik-RTP packet: 12B header + 13B sub-header
 // (0x0d, 0x80, 0x88=audio, …) + raw G.711 samples.
 func audioPacket(samples []byte) []byte {

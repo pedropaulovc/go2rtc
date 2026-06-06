@@ -47,11 +47,6 @@ const (
 	OpCTCheck        uint16 = 0x0c08
 	OpStreamCtrl     uint16 = 0x0c0a
 	OpDataLink       uint16 = 0x0c0b
-	OpPlaybackPause  uint16 = 0x0c10
-	OpPlaybackResume uint16 = 0x0c12
-	OpPlaybackSeek   uint16 = 0x0c14
-	OpPlaybackSearch uint16 = 0x0c16
-	OpPlaybackCtrl3  uint16 = 0x0c18
 	OpTransparent    uint16 = 0x0d00
 	OpTransparent2   uint16 = 0x0d02
 )
@@ -83,13 +78,10 @@ const (
 	AttrPortCount        byte = 0x82
 	AttrStreamMeta       byte = 0x83
 	AttrDeviceSession    byte = 0x84
-	AttrSeekRate         byte = 0x85
 	AttrDataLinkVal      byte = 0x87
 	AttrTransparentExt   byte = 0x8d
 	AttrExtParam1        byte = 0xae
 	AttrExtParam2        byte = 0xaf
-	AttrTimeSegment      byte = 0xb0
-	AttrSeekMeta         byte = 0xb1
 	AttrOptMeta1         byte = 0xb2
 	AttrOptMeta2         byte = 0xb3
 	AttrOptMeta3         byte = 0xb4

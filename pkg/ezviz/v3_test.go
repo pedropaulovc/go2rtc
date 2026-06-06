@@ -368,9 +368,6 @@ func TestOpcodeConstants(t *testing.T) {
 		{OpPlayRequest, 0x0c02, "PlayRequest"},
 		{OpTeardown, 0x0c04, "Teardown"},
 		{OpP2PSetup, 0x0b02, "P2PSetup"},
-		{OpPlaybackPause, 0x0c10, "PlaybackPause"},
-		{OpPlaybackResume, 0x0c12, "PlaybackResume"},
-		{OpPlaybackSeek, 0x0c14, "PlaybackSeek"},
 	}
 	for _, c := range cases {
 		if c.got != c.want {

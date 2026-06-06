@@ -42,23 +42,6 @@ func isVideoPacketType(t uint16) bool {
 	return t == 0x8060 || t == 0x8050 || t == 0x8051
 }
 
-// extractPlaybackPayload handles playback (busType=2) passthrough. Unlike live
-// preview, playback streams are an MPEG Program Stream container (the NVR stores
-// recordings as .ps and serves them as-is), NOT raw H.265 NALs. The correct
-// handling is to strip ONLY the 12-byte Hik-RTP header and feed the rest
-// straight to FFmpeg as `-f mpeg` — no sub-header strip, no NAL parsing (that is
-// what hikRTPExtractor does for live and it would mangle PS bytes). Returns nil
-// for control/non-video packets and empty payloads.
-func extractPlaybackPayload(payload []byte) []byte {
-	if len(payload) <= hikRTPHeaderLen {
-		return nil
-	}
-	if !isVideoPacketType(binary.BigEndian.Uint16(payload)) {
-		return nil
-	}
-	return payload[hikRTPHeaderLen:]
-}
-
 // audioSubType marks an audio sub-frame in the Hik-RTP sub-header (byte 2).
 const audioSubType = 0x88
 
