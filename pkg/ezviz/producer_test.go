@@ -1,8 +1,8 @@
 package ezviz
 
 import (
-	"errors"
 	"testing"
+	"time"
 )
 
 func TestParseURL(t *testing.T) {
@@ -48,12 +48,22 @@ func TestParseURLMissingFields(t *testing.T) {
 }
 
 // TestDialReachesTransport proves the data-plane wiring is reachable: NewProducer
-// → Dial → connect() hits the (still unported) P2P transport boundary rather
-// than failing earlier. Once connect()/ReadFrame() are ported this flips to a
-// live integration test.
+// → Dial → connect() runs login and fails on the network for an unreachable
+// host. It stays hermetic (no live cloud) by pointing at an invalid TLD that
+// fails DNS resolution quickly, and asserts an error is returned promptly.
 func TestDialReachesTransport(t *testing.T) {
-	_, err := NewProducer("ezviz://a@b.com:p@api.hik-connect.com/SERIAL")
-	if !errors.Is(err, errNotImplemented) {
-		t.Fatalf("expected errNotImplemented, got %v", err)
+	done := make(chan error, 1)
+	go func() {
+		_, err := NewProducer("ezviz://a@b.com:p@host.invalid/SERIAL")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected an error dialing an unreachable host")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Dial did not return within timeout")
 	}
 }

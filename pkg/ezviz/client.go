@@ -8,11 +8,6 @@ import (
 	"strings"
 )
 
-// errNotImplemented marks the cloud P2P transport boundary. Everything above it
-// — codec probe, frame pump, NAL handoff into go2rtc — is wired and compiles.
-// Implementing connect()/ReadFrame() makes the source stream.
-var errNotImplemented = errors.New("ezviz: cloud P2P transport not yet implemented")
-
 // config is parsed from the source URL:
 //
 //	ezviz://ACCOUNT:PASSWORD@API_HOST/SERIAL?channel=1&subtype=main
@@ -51,6 +46,7 @@ type config struct {
 type Client struct {
 	cfg        config
 	remoteAddr string // device NAT-mapped addr, filled by connect()
+	session    *session
 }
 
 // Dial parses the source URL and establishes the P2P session.
@@ -99,18 +95,104 @@ func parseURL(rawURL string) (config, error) {
 	return cfg, nil
 }
 
-// connect performs: login → P2P secret fetch → P2P_SETUP → hole-punch →
-// PLAY_REQUEST → SRT handshake. See the Client doc comment.
+// connect performs: login → P2P config + secret fetch → assemble the session
+// config → P2P_SETUP → hole-punch → PLAY_REQUEST → SRT handshake. Media then
+// flows asynchronously and is drained by ReadFrame.
 func (c *Client) connect() error {
-	return errNotImplemented
+	api := newAPIClient(c.cfg.baseURL)
+	if err := api.login(c.cfg.account, c.cfg.password); err != nil {
+		return err
+	}
+
+	p2p, err := api.getP2PConfig(c.cfg.serial)
+	if err != nil {
+		return err
+	}
+
+	secret, err := api.getP2PSecret()
+	if err != nil {
+		return err
+	}
+
+	// The link key (inner PLAY_REQUEST encryption) is the first 32 ASCII chars
+	// of the KMS secret.
+	linkKey := []byte(p2p.secretKey)
+	if len(linkKey) < 32 {
+		return fmt.Errorf("ezviz: KMS secret too short: %d chars", len(linkKey))
+	}
+	linkKey = linkKey[:32]
+
+	// P2P servers come from the per-device config; fall back to the
+	// account-level list returned alongside the secret.
+	servers := p2p.servers
+	if len(servers) == 0 {
+		servers = secret.servers
+	}
+	if len(servers) == 0 {
+		return errors.New("ezviz: no P2P servers available")
+	}
+
+	// Device NAT-mapped stream endpoint: prefer the WAN IP, fall back to NET IP.
+	deviceIP := p2p.wanIP
+	if deviceIP == "" {
+		deviceIP = p2p.netIP
+	}
+
+	cfg := sessionConfig{
+		deviceSerial:     c.cfg.serial,
+		devicePublicIP:   deviceIP,
+		devicePublicPort: p2p.netStreamPort,
+		p2pServers:       servers,
+		p2pKey:           secret.key,
+		p2pLinkKey:       linkKey,
+		p2pKeyVersion:    p2p.keyVersion,
+		p2pKeySaltIndex:  secret.saltIndex,
+		p2pKeySaltVer:    secret.saltVer,
+		userID:           extractUserID(api.sessionID),
+		clientID:         randomClientID(),
+		channelNo:        c.cfg.channel,
+		streamType:       streamTypeFor(c.cfg.subtype),
+		busType:          1, // live preview
+	}
+
+	sess, err := newSession(cfg)
+	if err != nil {
+		return err
+	}
+	if err := sess.start(); err != nil {
+		_ = sess.close()
+		return err
+	}
+
+	c.session = sess
+	if deviceIP != "" {
+		c.remoteAddr = fmt.Sprintf("%s:%d", deviceIP, p2p.netStreamPort)
+	}
+	return nil
+}
+
+// streamTypeFor maps a URL subtype to the device stream type: main=1, sub=2.
+func streamTypeFor(subtype string) int {
+	if subtype == "sub" {
+		return 2
+	}
+	return 1
 }
 
 // ReadFrame returns the next demuxed access unit, or io.EOF on stream end.
 func (c *Client) ReadFrame() (*Frame, error) {
-	return nil, errNotImplemented
+	if c.session == nil {
+		return nil, errors.New("ezviz: session not started")
+	}
+	return c.session.readFrame()
 }
 
-func (c *Client) Close() error { return nil }
+func (c *Client) Close() error {
+	if c.session == nil {
+		return nil
+	}
+	return c.session.close()
+}
 
 func (c *Client) Protocol() string { return "udp" }
 

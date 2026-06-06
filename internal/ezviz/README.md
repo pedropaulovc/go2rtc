@@ -31,15 +31,55 @@ source — hardware-accelerated where available:
 ```yaml
 streams:
   garage:      ezviz://ACCOUNT:PASSWORD@api.hik-connect.com/SERIAL?channel=4&subtype=main
-  garage_h264: ffmpeg:garage#video=h264#hardware=cuda   # drop #hardware=cuda for software
+  garage_h264: ffmpeg:garage#video=h264#audio=copy#hardware=cuda   # drop #hardware=cuda for software
 ```
+
+Keep an `#audio=` directive: `ffmpeg:` drops audio without one. Which codec
+depends on the player:
+
+- **WebRTC** plays the interleaved G.711 (PCMA) track as-is, so `#audio=copy`
+  works and avoids re-encoding.
+- **MSE** (the default `stream.html` player in most browsers) cannot decode
+  PCMA, so a `#audio=copy` stream plays silently there. Transcode to AAC with
+  `#audio=aac` for an MSE-audible stream:
+
+  ```yaml
+  garage_mse: ffmpeg:garage#video=h264#audio=aac#hardware=cuda
+  ```
 
 The `ffmpeg:` source pulls its input over go2rtc's internal RTSP, so the `rtsp:`
 module must stay enabled (it is by default).
 
+## How it works
+
+`pkg/ezviz` speaks the cloud P2P protocol end to end:
+
+1. REST login to the Hik-Connect / EZVIZ account, fetch the per-session P2P
+   secret and device routing config (credentials-only — no hardcoded keys).
+2. `P2P_SETUP` against the cloud, UDP hole-punch to reach the device directly.
+3. `PLAY_REQUEST` → SRT handshake → encrypted media.
+4. De-frame Hik-RTP, reassemble fragmented NALs, and hand whole H.265 / H.264
+   access units to go2rtc via the RAW path; codec parameters are probed from the
+   live stream. Interleaved G.711 A-law audio is surfaced on a second track.
+
 ## Status
 
-Data plane (codec probe → HEVC/H264 NAL handoff into go2rtc) is wired and tested.
-The cloud P2P transport (`pkg/ezviz/client.go`) is implemented in a follow-up;
-see the responsibilities documented on the `Client` type. The protocol is
-credentials-only (no hardcoded keys), HEVC main + sub, live preview.
+Verified end to end against real hardware (4K NVR): login → P2P → SRT → HEVC,
+sustained live preview at full resolution, `main` and `sub` both working, with
+interleaved G.711 (A-law / PCMA) audio.
+
+### Transport mix tested
+
+Media flowed over the **direct, hole-punched P2P path** in every verified run:
+once the UDP hole-punch completes, SRT media goes device → client over the
+punched socket. The client was behind a normal home/office NAT; testing a
+symmetric-NAT setup did not force a different path for this device.
+
+`PLAY_REQUEST` is sent on two paths for reliability — directly to the device and,
+in parallel, wrapped in a `TRANSFOR_DATA` message relayed through the P2P server.
+That relay carries only the *control* request as a belt-and-suspenders; **media
+itself never traverses a relay**, and there is no TCP media-relay fallback in
+this implementation. So "relayed" here means relayed control, not relayed video.
+
+See `pkg/ezviz/PROTOCOL.md` for the full wire format and the direct-vs-relayed
+breakdown.
