@@ -240,6 +240,44 @@ Hik-RTP/sub headers and reassembles RFC 7798 fragmentation units (FU, NAL type
 49) into Annex-B H.265 access units. Interleaved G.711 A-law (PCMA) audio is
 demuxed onto a second track. Codec parameters are probed from the live stream.
 
+## Live preview vs. recording playback (busType)
+
+PLAY_REQUEST carries a `busType` attribute (`0x76`) selecting the source:
+
+| busType | Source            | `AttrStartTime`/`AttrStopTime` (`0x7a`/`0x7b`) |
+| ------- | ----------------- | ---------------------------------------------- |
+| 1       | live preview      | a "today so far" date; live plays correctly with it (its effect on live is untested) |
+| 2       | recording playback| the requested window, camera-local wall clock  |
+
+The device also defines `busType` 3 (two-way talk) and 4 (a playback variant);
+this implementation only uses 1 and 2.
+
+The two modes also differ on the wire:
+
+- **Live (busType=1)** streams Hik-RTP-framed H.265 NAL units (see above).
+- **Playback (busType=2)** streams the recording as an **MPEG Program Stream**:
+  each SRT data packet is the 12-byte Hik-RTP header followed by a raw PS
+  fragment (no sub-header, no FU framing). Concatenating the fragments
+  reconstructs the PS, which `mpegps.go` demuxes — pack/system/PSM headers,
+  then PES packets (`0xE0`–`0xEF` H.265 video, `0xC0`–`0xDF` G.711 audio) — back
+  into the same Annex-B + PCMA Frame stream the live path produces, so the
+  Producer is unchanged. Video access units are delimited by the PES PTS.
+
+### Playback transport control (not implemented)
+
+This implementation streams the fixed `[start, stop]` window in one shot: there
+is no pause, resume, seek or speed control. The device exposes a dedicated set of
+in-stream playback-control opcodes for that, kept here as a reverse-engineering
+reference:
+
+| Opcode   | Name             | Purpose (observed)        |
+| -------- | ---------------- | ------------------------- |
+| `0x0C10` | PLAYBACK_PAUSE   | pause playback            |
+| `0x0C12` | PLAYBACK_RESUME  | resume playback           |
+| `0x0C14` | PLAYBACK_SEEK    | seek / set playback rate  |
+| `0x0C16` | PLAYBACK_SEARCH  | search by time segment    |
+| `0x0C18` | PLAYBACK_CTRL3   | further playback control  |
+
 ## Deliberately out of scope
 
 These were reverse-engineered but are not part of this implementation's path:

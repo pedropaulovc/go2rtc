@@ -32,6 +32,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -75,8 +76,11 @@ type sessionConfig struct {
 	userID           string
 	clientID         uint32
 	channelNo        int
-	streamType       int // 1=main, 2=sub
-	busType          int // 1=live preview, 2=playback
+	streamType       int    // 1=main, 2=sub
+	busType          int    // 1=live preview, 2=playback
+	startTime        string // playback window start, device format YYYY-MM-DDThh:mm:ss
+	stopTime         string // playback window end
+	playbackIdle     time.Duration // >0 on playback: close with EOF after this much post-media silence
 }
 
 // session holds the live UDP transport state.
@@ -107,6 +111,7 @@ type session struct {
 	reorderBuf    map[uint32][]byte
 
 	extractor *hikRTPExtractor
+	pb        *psDemuxer // playback (busType=2) MPEG-PS demux; nil for live
 	// feedMu serializes feed(): the receive loop and the reorder flush timer can
 	// both deliver payloads, and the extractor (and playback demuxer) carry
 	// cross-packet state that must not be mutated concurrently.
@@ -121,6 +126,10 @@ type session struct {
 	// one epoch keeps the audio and video tracks in sync (they ride the same SRT
 	// session, so capture-to-arrival latency is shared and cancels out).
 	epoch time.Time
+
+	// lastMediaNanos is the arrival time (UnixNano) of the most recent media frame,
+	// read by the playback idle watchdog. Atomic to stay off the push hot path's lock.
+	lastMediaNanos atomic.Int64
 
 	frames     chan *Frame
 	punchCh    chan struct{}
@@ -150,6 +159,7 @@ func newSession(cfg sessionConfig) (*session, error) {
 		reorderBuf:    make(map[uint32][]byte),
 		extractor:     newHikRTPExtractor(),
 		frames:        make(chan *Frame, 256),
+		pb:            newPSDemuxer(),
 		punchCh:       make(chan struct{}),
 		dataCh:        make(chan struct{}),
 		closeCh:       make(chan struct{}),
@@ -188,7 +198,44 @@ func (s *session) start() error {
 
 	// Step 5: nudge the device to start streaming with a SESSION_SETUP packet.
 	s.sendSessionSetup()
+
+	// Step 6 (playback only): watch for the post-media silence that marks the end
+	// of the window / the live edge and turn it into a clean EOF.
+	if s.cfg.playbackIdle > 0 {
+		s.wg.Add(1)
+		go s.idleWatchdog()
+	}
 	return nil
+}
+
+// idleWatchdog closes the frames channel (→ readFrame returns io.EOF) once the
+// device has gone quiet for cfg.playbackIdle after delivering at least one media
+// frame. Playback has no end-of-stream marker: at a window end or the live edge
+// the device simply stops sending, so without this the consumer would hang until
+// its own read-timeout. It never fires before the first frame, so a slow bring-up
+// is not mistaken for an empty recording.
+func (s *session) idleWatchdog() {
+	defer s.wg.Done()
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-s.closeCh:
+			return
+		case <-tick.C:
+			last := s.lastMediaNanos.Load()
+			if last == 0 {
+				continue // no media yet — don't time out the bring-up
+			}
+			if time.Since(time.Unix(0, last)) >= s.cfg.playbackIdle {
+				// close() closes closeCh (stopping push) before frames and waits on
+				// the wait group — which includes this goroutine — so run it
+				// separately and return to let that wait complete.
+				go s.close()
+				return
+			}
+		}
+	}
 }
 
 func (s *session) contactP2PServers() error {
@@ -349,8 +396,18 @@ func (s *session) buildPlayRequestBody() []byte {
 
 	now := time.Now()
 	today := now.Format("2006-01-02")
+
+	// Live preview ignores the time window but the device still expects the
+	// fields; default to "today so far". Playback (busType=2) overrides both with
+	// the requested recording window.
 	start := today + "T00:00:00"
 	stop := today + "T" + now.Format("15:04:05")
+	if s.cfg.startTime != "" {
+		start = s.cfg.startTime
+	}
+	if s.cfg.stopTime != "" {
+		stop = s.cfg.stopTime
+	}
 
 	var body []byte
 	body = appendTLV(body, AttrBusType, []byte{s.busType()})
@@ -536,8 +593,15 @@ func (s *session) handlePacket(buf []byte, src *net.UDPAddr) {
 		s.sendToDevice(resp)
 		return
 	case srtCtrlAck, srtCtrlShutdown, srtCtrlAck2, srtCtrlNak:
-		// ACK / NAK / ACK2 / shutdown — nothing to do. (0x8002/0x8003/0x8006
-		// also cover the custom DATA_ACK / DATA_REF / SHORT_ACK aliases.)
+		// ACK / NAK / ACK2 / shutdown — nothing to do. (0x8002/0x8003/0x8006 also
+		// cover the custom DATA_ACK / DATA_REF / SHORT_ACK aliases.) Despite its
+		// name, 0x8005 is NOT an end-of-stream signal in this dialect: live and
+		// playback captures both show exactly one 0x8005 arriving early (the device
+		// tearing down the control sub-session once the video sub-session is up),
+		// after which media streams normally for the rest of the session. Closing
+		// on it truncates the stream ~5s in. Playback simply streams from the start
+		// time until the consumer disconnects; the device sends neither a PS
+		// program-end marker nor a distinct end-of-window shutdown.
 		return
 	case pktSessionSetup:
 		s.handleSessionSetup(buf)
@@ -914,6 +978,19 @@ func (s *session) feed(payload []byte) {
 	s.feedMu.Lock()
 	defer s.feedMu.Unlock()
 
+	// Playback (busType=2) is an MPEG Program Stream, not Hik-RTP-framed NALs:
+	// strip the 12-byte header and let the PS demuxer reconstruct access units.
+	if s.cfg.busType == 2 {
+		frag := extractPlaybackPayload(payload)
+		if frag == nil {
+			return
+		}
+		for _, f := range s.pb.write(frag) {
+			s.push(f)
+		}
+		return
+	}
+
 	// Audio is interleaved on the same SRT data session as video, distinguished
 	// by the sub-header. Surface G.711 frames on the audio track.
 	if a := extractAudioPayload(payload); a != nil {
@@ -942,6 +1019,7 @@ func (s *session) push(f *Frame) {
 		return
 	default:
 	}
+	s.lastMediaNanos.Store(time.Now().UnixNano())
 	select {
 	case s.frames <- f:
 	case <-s.closeCh:

@@ -42,6 +42,23 @@ func isVideoPacketType(t uint16) bool {
 	return t == 0x8060 || t == 0x8050 || t == 0x8051
 }
 
+// extractPlaybackPayload returns the MPEG-PS fragment carried by a playback
+// (busType=2) data packet. Recordings stream as an MPEG Program Stream split
+// across SRT packets: each packet is the 12-byte Hik-RTP header followed by a
+// raw PS fragment — no 13-byte sub-header and no NAL framing (that is the live
+// path, which would mangle PS bytes). Concatenating these fragments in order
+// reconstructs the PS byte stream for psDemuxer. Returns nil for control and
+// empty packets.
+func extractPlaybackPayload(payload []byte) []byte {
+	if len(payload) <= hikRTPHeaderLen {
+		return nil
+	}
+	if !isVideoPacketType(binary.BigEndian.Uint16(payload)) {
+		return nil
+	}
+	return payload[hikRTPHeaderLen:]
+}
+
 // audioSubType marks an audio sub-frame in the Hik-RTP sub-header (byte 2).
 const audioSubType = 0x88
 
