@@ -133,3 +133,47 @@ my client doesn't. **The app pcap is ground truth.**
    detect playback idle after first media and close the stream cleanly instead of
    hanging; (b) open-ended playback via the PlaybackContinue V3 control loop, for
    true app-parity continuous playback.
+
+## iVMS-4200 Windows cross-check (2026-06-06, sandbox deliverable)
+
+A peer Claude instance ran iVMS-4200 v3.13.2.5 against the **same NVR** (device
+`24.35.64.195:17193`) on Windows: Ghidra static decompile of the iVMS native DLLs +
+live plaintext `plug.log` + npcap. (Deliverable: `ivms-ezviz-re-deliverable.zip` —
+`report/REPORT.md`, `decompiles/`, `pcaps/`.) Verdict: **go2rtc's protocol model is
+correct.** Confirmations and the one correction:
+
+- **CP2PV3Client lives in `libCASClient.dll`** (the Windows twin of Android
+  `libezstreamclient.so`). `StreamClient.dll` is the RTSP/VTM relay = go2rtc's
+  out-of-scope path.
+- **busType=2 for time playback — CONFIRMED** (live log `BusType:2`; live preview
+  `BusType:1`). busType 4 exists in enums but iVMS does not use it. No change.
+- **PLAY_REQUEST TLVs — CONFIRMED**: busType 0x76, chan 0x77, streamType 0x78,
+  streamSession 0x7e, sessionKey 0x05, serial 0x83, expand header
+  keyVer=101/userId/clientId/devChannel, 32-byte link key, `linkencrypt:0`
+  (encryption field 0). All exactly as `v3.go`/`session.go` emit.
+- **Empty stop ⇒ no media — CONFIRMED** (matches our own finding). Open-ended is a
+  loop of bounded windows, not "omit stop".
+- **No end-of-window EOS — CONFIRMED by design.** Session is held open by a V3
+  `0x0C0A` keepalive every 3 s ("Direct replay, heart beat interval is set to 3s");
+  the client tracks position and drives the next action. (Our client streams a
+  single window and relies on SRT-level keepalives; it does not send 0x0C0A.)
+- **Opcode-table CORRECTION (folded into PROTOCOL.md):** from
+  `CP2PV3Client::P2PPlayBackControl`'s switch: 0x0C10 pause, 0x0C12 resume,
+  **0x0C14 = change-RATE** (was mislabelled seek), **0x0C16 = seek/search**,
+  **0x0C18 = CONTINUE** (was "further ctrl"). Control body is a **pugixml**
+  `<Request><OperationCode><Session><SeekInfo><StartAt><StopAt>` doc shared by seek
+  and continue; **continue omits `<SeekUuid>`**, seek includes it. Framed exactly
+  like PLAY_REQUEST (same expand header + link-key AES), sent as synchronous
+  request/response. Also corrected the stray `0x0C0A` row (it's the HEARTBEAT, not
+  "pause/seek family").
+- **How iVMS actually moves around (empirical, the key practical finding):** over
+  **direct P2P** iVMS does NOT send 0x0C16/0x0C18. A timeline seek = **TEARDOWN
+  `0x0C04` + new PLAY_REQUEST `0x0C02`** with the new window. The 0x0C1x XML
+  controls are the device-relay/ISAPI variant.
+  → **Recommended open-ended/continuous playback for go2rtc = a loop of bounded
+  PLAY_REQUEST windows** (on exhaustion: teardown 0x0C04 + replay 0x0C02 with
+  next start = previous stop), reusing `buildPlayRequestBody`. Not the 0x0C18 path.
+- **Minor format note:** iVMS emits start/stop as compact UTC `YYYYMMDDThhmmssZ`
+  (e.g. `20260605T135800Z`); go2rtc emits dashed camera-local `2006-01-02T15:04:05`.
+  The **device accepts both** (go2rtc is validated working). Switching to
+  `20060102T150405Z` UTC is optional (firmware-robustness only).

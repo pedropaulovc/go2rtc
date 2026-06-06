@@ -108,7 +108,7 @@ reference:
 | `0x0B05` | TRANSFOR_DATA2  | Alternate relay-data variant                |
 | `0x0C07` | VOICE_TALK      | Two-way audio backchannel                   |
 | `0x0C08` | CT_CHECK        | Capability/connection check                 |
-| `0x0C0A` | STREAM_CTRL     | In-stream control (pause/seek family)       |
+| `0x0C0A` | HEARTBEAT       | Playback keepalive (iVMS: every 3 s)        |
 | `0x0C0B` | DATA_LINK       | Data-link negotiation                       |
 | `0x0D00` | TRANSPARENT     | Transparent ISAPI passthrough               |
 | `0x0D02` | TRANSPARENT2    | Transparent passthrough variant             |
@@ -268,15 +268,49 @@ The two modes also differ on the wire:
 This implementation streams the fixed `[start, stop]` window in one shot: there
 is no pause, resume, seek or speed control. The device exposes a dedicated set of
 in-stream playback-control opcodes for that, kept here as a reverse-engineering
-reference:
+reference. Opcodes and bodies below are **confirmed** against iVMS-4200's
+`libCASClient.dll` (`CP2PV3Client::P2PPlayBackControl` opcode switch + the shared
+XML builder `CChipParser::CreatePlaybackSeekOrContinueReq`):
 
 | Opcode   | Name             | Purpose (observed)        |
 | -------- | ---------------- | ------------------------- |
 | `0x0C10` | PLAYBACK_PAUSE   | pause playback            |
 | `0x0C12` | PLAYBACK_RESUME  | resume playback           |
-| `0x0C14` | PLAYBACK_SEEK    | seek / set playback rate  |
-| `0x0C16` | PLAYBACK_SEARCH  | search by time segment    |
-| `0x0C18` | PLAYBACK_CTRL3   | further playback control  |
+| `0x0C14` | PLAYBACK_RATE    | change playback rate      |
+| `0x0C16` | PLAYBACK_SEEK    | seek / search by time     |
+| `0x0C18` | PLAYBACK_CONTINUE| continue past the window  |
+
+These control messages are framed **identically to PLAY_REQUEST `0x0C02`** (same
+expand header + link-key AES; the device's opcode allow-list is
+`0xC02,0xC04,0xC07,0xC0A,0xC0B,0xC10,0xC12,0xC14,0xC16,0xC18,0xD00,0xD02`) and are
+sent as a **synchronous request/response** (`BuildAndSendPlaybackControlRequest` →
+`BuildMsg` → `SendRequest`, 10 s timeout). The body is a **pugixml document**,
+shared by seek and continue:
+
+```xml
+<Request>
+  <OperationCode>…</OperationCode>
+  <Session>…</Session>
+  <SeekInfo><StartAt>…</StartAt><StopAt>…</StopAt></SeekInfo>  <!-- per channel -->
+  <SeekUuid>…</SeekUuid>   <!-- SEEK (0x0C16) only; OMITTED for CONTINUE (0x0C18) -->
+</Request>
+```
+
+So **continue advances by supplying a fresh `[StartAt, StopAt]` window with no
+`<SeekUuid>`**. Note `0x0C0A` is the **3-second keepalive heartbeat** that holds
+a playback session open for these controls (`CCasP2PClient::StartHeartThread`,
+"Direct replay, heart beat interval is set to 3s"); this client streams a
+single bounded window and relies on SRT-level keepalives instead, so it does not
+send `0x0C0A`.
+
+**Empirically**, however, iVMS Remote Playback over **direct P2P** does NOT use
+the `0x0C1x` controls to move around: a timeline seek tears the session down
+(`0x0C04`) and sends a **new PLAY_REQUEST `0x0C02`** with the new window. So the
+practical way to stream open-ended / past-window playback is a **loop of bounded
+PLAY_REQUEST windows** (teardown + replay, next `start` = previous `stop`),
+reusing `buildPlayRequestBody` — not the XML `0x0C18` control. The device emits
+**no end-of-window EOS** (no PS program-end, no `0x8005`): the client tracks the
+position and drives the next window itself.
 
 ## Deliberately out of scope
 
