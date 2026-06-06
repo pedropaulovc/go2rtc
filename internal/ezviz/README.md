@@ -22,6 +22,17 @@ streams:
 `hikconnect:` and `ezviz:` are interchangeable aliases for the same source — use
 whichever matches the app you registered the device in.
 
+## Discovery
+
+You don't need to know serials or channel numbers up front. On the **Add** page the
+"EZVIZ / Hik-Connect" wizard logs in to your account and lists every device,
+channel, and stream quality as a ready-to-add source — each channel is offered at
+both `main` and `sub` so you can pick the resolution per stream.
+
+The same listing is available read-only at `GET /api/ezviz?account=…&password=…`
+(optional `&host=…` for a non-default region). It only reads the account — nothing
+about the account or devices is changed.
+
 ## Browser playback
 
 The device streams HEVC (H.265). Browsers play H.264 over WebRTC/MSE but generally
