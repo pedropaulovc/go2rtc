@@ -35,12 +35,25 @@ streams:
 
 - `start` — recording window start (required to enter playback). Accepts
   `2026-06-05T19:00:00`, `2026-06-05 19:00:00`, or RFC 3339.
-- `end` — window end (also required). Times are camera-local wall clock, so no
-  default can be synthesized — the go2rtc host clock (often UTC under Docker)
-  would pick the wrong window — and both ends must be given explicitly.
+- `end` — window end (**optional**). With `end`, the fixed `[start, end]` window
+  is streamed. Without `end`, playback is **open-ended**: it streams from `start`
+  through all recorded footage up to the live edge, then the stream ends. (Omit
+  `end` only when you mean open-ended — there is no host-clock default, since the
+  times are camera-local and the go2rtc host is often UTC under Docker.)
+
+```yaml
+streams:
+  # open-ended: everything from 19:00 onward, up to the live edge
+  lobby_since_7pm: ezviz://ACCOUNT:PASSWORD@api.hik-connect.com/SERIAL?channel=1&start=2026-06-05T19:00:00
+```
 
 Times are **camera-local** — they are sent to the device verbatim with no
 timezone conversion, so use the wall-clock shown on the camera's own overlay.
+
+The device sends no end-of-stream marker when a window finishes or playback
+reaches the live edge — it simply stops. go2rtc detects that silence and ends the
+stream cleanly (rather than hanging), so a fixed window plays its clip and then
+the stream closes.
 
 Recordings stream as HEVC over an MPEG Program Stream that this source demuxes
 back into the same H.265 + G.711 tracks as live, so the `ffmpeg:` transcode

@@ -82,11 +82,60 @@ func TestParseURLEndRequiresStart(t *testing.T) {
 	}
 }
 
-func TestParseURLStartRequiresEnd(t *testing.T) {
-	// The playback window is camera-local wall clock; no default end can be
-	// synthesized without the camera timezone, so start alone must error.
-	if _, err := parseURL("ezviz://a@b.com:p@h/SERIAL?start=2026-06-05T19:00:00"); err == nil {
-		t.Fatal("start without end must error")
+func TestParseURLStartOnlyIsOpenEnded(t *testing.T) {
+	// start without end is valid: open-ended playback (stream from start to the
+	// live edge). The device gets a synthesized far-future stop (start+24h).
+	cfg, err := parseURL("ezviz://a@b.com:p@h/SERIAL?start=2026-06-05T19:00:00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.mode() != modeOpenEnded {
+		t.Fatalf("mode = %d, want modeOpenEnded", cfg.mode())
+	}
+	if !cfg.isPlayback() {
+		t.Error("open-ended URL must be playback")
+	}
+	stop, err := cfg.effectiveStop()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stop != "2026-06-06T19:00:00" {
+		t.Errorf("effectiveStop = %q, want start+24h 2026-06-06T19:00:00", stop)
+	}
+}
+
+func TestConfigMode(t *testing.T) {
+	cases := []struct {
+		url  string
+		want playbackMode
+	}{
+		{"ezviz://a@b.com:p@h/SERIAL", modeLive},
+		{"ezviz://a@b.com:p@h/SERIAL?start=2026-06-05T19:00:00", modeOpenEnded},
+		{"ezviz://a@b.com:p@h/SERIAL?start=2026-06-05T19:00:00&end=2026-06-05T19:01:00", modeWindow},
+	}
+	for _, c := range cases {
+		cfg, err := parseURL(c.url)
+		if err != nil {
+			t.Fatalf("%s: %v", c.url, err)
+		}
+		if cfg.mode() != c.want {
+			t.Errorf("%s: mode = %d, want %d", c.url, cfg.mode(), c.want)
+		}
+	}
+}
+
+func TestEffectiveStopWindowUnchanged(t *testing.T) {
+	// A fixed window passes its stop through verbatim.
+	cfg, err := parseURL("ezviz://a@b.com:p@h/SERIAL?start=2026-06-05T19:00:00&end=2026-06-05T19:05:00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop, err := cfg.effectiveStop()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stop != "2026-06-05T19:05:00" {
+		t.Errorf("effectiveStop = %q, want the requested 2026-06-05T19:05:00", stop)
 	}
 }
 

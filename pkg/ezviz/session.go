@@ -32,6 +32,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -79,6 +80,7 @@ type sessionConfig struct {
 	busType          int    // 1=live preview, 2=playback
 	startTime        string // playback window start, device format YYYY-MM-DDThh:mm:ss
 	stopTime         string // playback window end
+	playbackIdle     time.Duration // >0 on playback: close with EOF after this much post-media silence
 }
 
 // session holds the live UDP transport state.
@@ -124,6 +126,10 @@ type session struct {
 	// one epoch keeps the audio and video tracks in sync (they ride the same SRT
 	// session, so capture-to-arrival latency is shared and cancels out).
 	epoch time.Time
+
+	// lastMediaNanos is the arrival time (UnixNano) of the most recent media frame,
+	// read by the playback idle watchdog. Atomic to stay off the push hot path's lock.
+	lastMediaNanos atomic.Int64
 
 	frames     chan *Frame
 	punchCh    chan struct{}
@@ -192,7 +198,44 @@ func (s *session) start() error {
 
 	// Step 5: nudge the device to start streaming with a SESSION_SETUP packet.
 	s.sendSessionSetup()
+
+	// Step 6 (playback only): watch for the post-media silence that marks the end
+	// of the window / the live edge and turn it into a clean EOF.
+	if s.cfg.playbackIdle > 0 {
+		s.wg.Add(1)
+		go s.idleWatchdog()
+	}
 	return nil
+}
+
+// idleWatchdog closes the frames channel (→ readFrame returns io.EOF) once the
+// device has gone quiet for cfg.playbackIdle after delivering at least one media
+// frame. Playback has no end-of-stream marker: at a window end or the live edge
+// the device simply stops sending, so without this the consumer would hang until
+// its own read-timeout. It never fires before the first frame, so a slow bring-up
+// is not mistaken for an empty recording.
+func (s *session) idleWatchdog() {
+	defer s.wg.Done()
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-s.closeCh:
+			return
+		case <-tick.C:
+			last := s.lastMediaNanos.Load()
+			if last == 0 {
+				continue // no media yet — don't time out the bring-up
+			}
+			if time.Since(time.Unix(0, last)) >= s.cfg.playbackIdle {
+				// close() closes closeCh (stopping push) before frames and waits on
+				// the wait group — which includes this goroutine — so run it
+				// separately and return to let that wait complete.
+				go s.close()
+				return
+			}
+		}
+	}
 }
 
 func (s *session) contactP2PServers() error {
@@ -976,6 +1019,7 @@ func (s *session) push(f *Frame) {
 		return
 	default:
 	}
+	s.lastMediaNanos.Store(time.Now().UnixNano())
 	select {
 	case s.frames <- f:
 	case <-s.closeCh:

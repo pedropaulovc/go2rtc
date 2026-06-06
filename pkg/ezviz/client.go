@@ -24,7 +24,27 @@ type config struct {
 	// Playback (busType=2): set when the URL carries a start time. Live preview
 	// (busType=1) leaves these zero.
 	start string // recording window start, device format YYYY-MM-DDThh:mm:ss
-	stop  string // recording window end (optional)
+	stop  string // recording window end (empty => open-ended, stream to live edge)
+}
+
+// playbackMode is the three-way source selection derived from the URL window.
+// Modelled as an enum (not a pair of bools) so new states stay easy to add.
+type playbackMode int
+
+const (
+	modeLive       playbackMode = iota // no start: live preview (busType=1)
+	modeWindow                         // start+end: a fixed [start, stop] window
+	modeOpenEnded                      // start only: stream from start to the live edge
+)
+
+func (c config) mode() playbackMode {
+	if c.start == "" {
+		return modeLive
+	}
+	if c.stop == "" {
+		return modeOpenEnded
+	}
+	return modeWindow
 }
 
 // isPlayback reports whether the URL requested a recording window rather than
@@ -101,9 +121,11 @@ func parseURL(rawURL string) (config, error) {
 	}
 
 	// Playback window. Presence of start switches the session to recording
-	// playback (busType=2). Both ends are required: the window is camera-local
-	// wall clock, so we cannot synthesize a default end without knowing the
-	// camera's timezone (the go2rtc host clock would be wrong under Docker/UTC).
+	// playback (busType=2). `end` is optional: with both ends it streams the fixed
+	// [start, stop] window; with start only it is open-ended and streams from start
+	// to the live edge (see connect — we hand the device a far-future stop, which it
+	// honours until the recording catches up to "now" and then goes silent). Times
+	// are camera-local wall clock and passed through verbatim.
 	if v := q.Get("start"); v != "" {
 		if cfg.start, err = parsePlaybackTime(v); err != nil {
 			return config{}, fmt.Errorf("ezviz: bad start %q: %w", v, err)
@@ -117,9 +139,6 @@ func parseURL(rawURL string) (config, error) {
 	if cfg.stop != "" && !cfg.isPlayback() {
 		return config{}, errors.New("ezviz: end requires start")
 	}
-	if cfg.isPlayback() && cfg.stop == "" {
-		return config{}, errors.New("ezviz: playback requires both start and end (camera-local wall clock)")
-	}
 
 	if cfg.account == "" || cfg.password == "" || cfg.serial == "" {
 		return config{}, errors.New("ezviz: url needs account:password@host/serial")
@@ -129,6 +148,35 @@ func parseURL(rawURL string) (config, error) {
 
 // deviceTimeLayout is the timestamp format the device's PLAY_REQUEST expects.
 const deviceTimeLayout = "2006-01-02T15:04:05"
+
+// openEndedSpan is the stop offset handed to the device for open-ended playback.
+// The device needs a concrete [start, stop] — an empty stop streams nothing — but
+// it stops sending once playback catches the live edge regardless of how far the
+// stop is, so any value comfortably past "now" works. 24 h covers a full day of
+// catch-up from the start time; it is camera-local arithmetic (start + span) so no
+// timezone is involved.
+const openEndedSpan = 24 * time.Hour
+
+// playbackIdleTimeout closes a playback session once the device has been silent
+// this long after delivering media. The device sends no end-of-stream marker at a
+// window end or the live edge (it just goes quiet — confirmed against hardware and
+// iVMS-4200), so this turns that silence into a clean io.EOF instead of hanging
+// until the downstream read-timeout. Comfortably longer than any intra-stream gap
+// observed during continuous playback (sub-second).
+const playbackIdleTimeout = 10 * time.Second
+
+// effectiveStop is the stop time sent to the device for this config: the requested
+// stop for a fixed window, or start+openEndedSpan for open-ended playback.
+func (c config) effectiveStop() (string, error) {
+	if c.mode() != modeOpenEnded {
+		return c.stop, nil
+	}
+	t, err := time.Parse(deviceTimeLayout, c.start)
+	if err != nil {
+		return "", fmt.Errorf("ezviz: bad start %q: %w", c.start, err)
+	}
+	return t.Add(openEndedSpan).Format(deviceTimeLayout), nil
+}
 
 // parsePlaybackTime accepts a few common timestamp spellings and normalizes them
 // to the device's layout. The wall-clock value is passed through verbatim — the
@@ -186,6 +234,11 @@ func (c *Client) connect() error {
 		deviceIP = p2p.netIP
 	}
 
+	stop, err := c.cfg.effectiveStop()
+	if err != nil {
+		return err
+	}
+
 	cfg := sessionConfig{
 		deviceSerial:     c.cfg.serial,
 		devicePublicIP:   deviceIP,
@@ -202,7 +255,12 @@ func (c *Client) connect() error {
 		streamType:       streamTypeFor(c.cfg.subtype),
 		busType:          busTypeFor(c.cfg),
 		startTime:        c.cfg.start,
-		stopTime:         c.cfg.stop,
+		stopTime:         stop,
+	}
+	// Playback gives no end-of-stream marker; arm the idle watchdog so the live
+	// edge / window end becomes a clean EOF rather than a hang.
+	if c.cfg.isPlayback() {
+		cfg.playbackIdle = playbackIdleTimeout
 	}
 
 	sess, err := newSession(cfg)
