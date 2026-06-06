@@ -113,3 +113,23 @@ Media data packets carry a Hik-RTP framing layer. `hikrtp.go` strips the
 Hik-RTP/sub headers and reassembles RFC 7798 fragmentation units (FU, NAL type
 49) into Annex-B H.265 access units. Interleaved G.711 A-law (PCMA) audio is
 demuxed onto a second track. Codec parameters are probed from the live stream.
+
+## Live preview vs. recording playback (busType)
+
+PLAY_REQUEST carries a `busType` attribute (`0x76`) selecting the source:
+
+| busType | Source            | `AttrStartTime`/`AttrStopTime` (`0x7a`/`0x7b`) | `AttrSeekRate` (`0x85`) |
+| ------- | ----------------- | ---------------------------------------------- | ----------------------- |
+| 1       | live preview      | "today so far" placeholder (device ignores)    | —                       |
+| 2       | recording playback| the requested window, camera-local wall clock  | speed multiplier        |
+
+The two modes also differ on the wire:
+
+- **Live (busType=1)** streams Hik-RTP-framed H.265 NAL units (see above).
+- **Playback (busType=2)** streams the recording as an **MPEG Program Stream**:
+  each SRT data packet is the 12-byte Hik-RTP header followed by a raw PS
+  fragment (no sub-header, no FU framing). Concatenating the fragments
+  reconstructs the PS, which `mpegps.go` demuxes — pack/system/PSM headers,
+  then PES packets (`0xE0`–`0xEF` H.265 video, `0xC0`–`0xDF` G.711 audio) — back
+  into the same Annex-B + PCMA Frame stream the live path produces, so the
+  Producer is unchanged. Video access units are delimited by the PES PTS.

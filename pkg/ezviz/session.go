@@ -77,8 +77,11 @@ type sessionConfig struct {
 	userID           string
 	clientID         uint32
 	channelNo        int
-	streamType       int // 1=main, 2=sub
-	busType          int // 1=live preview, 2=playback
+	streamType       int    // 1=main, 2=sub
+	busType          int    // 1=live preview, 2=playback
+	startTime        string // playback window start, device format YYYY-MM-DDThh:mm:ss
+	stopTime         string // playback window end
+	speed            int    // playback speed multiplier (0/1 = realtime)
 }
 
 // session holds the live UDP transport state.
@@ -109,6 +112,7 @@ type session struct {
 	reorderBuf    map[uint32][]byte
 
 	extractor *hikRTPExtractor
+	pb        *psDemuxer // playback (busType=2) MPEG-PS demux; nil for live
 	frameNo   uint32
 
 	audioFrameNo uint32
@@ -148,6 +152,7 @@ func newSession(cfg sessionConfig) (*session, error) {
 		reorderBuf:    make(map[uint32][]byte),
 		extractor:     newHikRTPExtractor(),
 		frames:        make(chan *Frame, 256),
+		pb:            newPSDemuxer(),
 		punchCh:       make(chan struct{}),
 		dataCh:        make(chan struct{}),
 		closeCh:       make(chan struct{}),
@@ -344,8 +349,18 @@ func (s *session) buildPlayRequestBody() []byte {
 
 	now := time.Now()
 	today := now.Format("2006-01-02")
+
+	// Live preview ignores the time window but the device still expects the
+	// fields; default to "today so far". Playback (busType=2) overrides both with
+	// the requested recording window.
 	start := today + "T00:00:00"
 	stop := today + "T" + now.Format("15:04:05")
+	if s.cfg.startTime != "" {
+		start = s.cfg.startTime
+	}
+	if s.cfg.stopTime != "" {
+		stop = s.cfg.stopTime
+	}
 
 	var body []byte
 	body = appendTLV(body, AttrBusType, []byte{s.busType()})
@@ -359,6 +374,9 @@ func (s *session) buildPlayRequestBody() []byte {
 	body = appendTLV(body, AttrStreamMeta, []byte(serial))
 	body = appendTLV(body, AttrOptMeta1, []byte(newUUID()))
 	body = appendTLV(body, AttrOptMeta2, []byte(strconv.FormatInt(now.UnixMilli(), 10)))
+	if s.cfg.busType == 2 && s.cfg.speed > 0 {
+		body = appendTLV(body, AttrSeekRate, u32(uint32(s.cfg.speed)))
+	}
 	return body
 }
 
@@ -901,6 +919,19 @@ func (s *session) scheduleFlushLocked() {
 // feed runs a delivered video payload through the Hik-RTP extractor and pushes
 // any completed NAL units onto the frames channel.
 func (s *session) feed(payload []byte) {
+	// Playback (busType=2) is an MPEG Program Stream, not Hik-RTP-framed NALs:
+	// strip the 12-byte header and let the PS demuxer reconstruct access units.
+	if s.cfg.busType == 2 {
+		frag := extractPlaybackPayload(payload)
+		if frag == nil {
+			return
+		}
+		for _, f := range s.pb.write(frag) {
+			s.push(f)
+		}
+		return
+	}
+
 	// Audio is interleaved on the same SRT data session as video, distinguished
 	// by the sub-header. Surface G.711 frames on the audio track.
 	if a := extractAudioPayload(payload); a != nil {

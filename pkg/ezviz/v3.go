@@ -34,21 +34,21 @@ const (
 
 // Opcodes (message types, big-endian at offset 2).
 const (
-	OpTransforSetup  uint16 = 0x0b00
-	OpP2PSetup       uint16 = 0x0b02
-	OpTransforCtrl   uint16 = 0x0b03
-	OpTransforData   uint16 = 0x0b04
-	OpTransforData2  uint16 = 0x0b05
-	OpPunchRequest   uint16 = 0x0c00 // device -> client: hole-punch request
-	OpPunchResponse  uint16 = 0x0c01 // client -> device: hole-punch response
-	OpPlayRequest    uint16 = 0x0c02
-	OpTeardown       uint16 = 0x0c04
-	OpVoiceTalk      uint16 = 0x0c07
-	OpCTCheck        uint16 = 0x0c08
-	OpStreamCtrl     uint16 = 0x0c0a
-	OpDataLink       uint16 = 0x0c0b
-	OpTransparent    uint16 = 0x0d00
-	OpTransparent2   uint16 = 0x0d02
+	OpTransforSetup uint16 = 0x0b00
+	OpP2PSetup      uint16 = 0x0b02
+	OpTransforCtrl  uint16 = 0x0b03
+	OpTransforData  uint16 = 0x0b04
+	OpTransforData2 uint16 = 0x0b05
+	OpPunchRequest  uint16 = 0x0c00 // device -> client: hole-punch request
+	OpPunchResponse uint16 = 0x0c01 // client -> device: hole-punch response
+	OpPlayRequest   uint16 = 0x0c02
+	OpTeardown      uint16 = 0x0c04
+	OpVoiceTalk     uint16 = 0x0c07
+	OpCTCheck       uint16 = 0x0c08
+	OpStreamCtrl    uint16 = 0x0c0a
+	OpDataLink      uint16 = 0x0c0b
+	OpTransparent   uint16 = 0x0d00
+	OpTransparent2  uint16 = 0x0d02
 )
 
 // Attribute tags (the T in the body TLVs).
@@ -78,6 +78,7 @@ const (
 	AttrPortCount        byte = 0x82
 	AttrStreamMeta       byte = 0x83
 	AttrDeviceSession    byte = 0x84
+	AttrSeekRate         byte = 0x85 // playback speed multiplier (busType=2)
 	AttrDataLinkVal      byte = 0x87
 	AttrTransparentExt   byte = 0x8d
 	AttrExtParam1        byte = 0xae

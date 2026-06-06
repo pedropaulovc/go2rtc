@@ -47,6 +47,106 @@ func TestParseURLMissingFields(t *testing.T) {
 	}
 }
 
+func TestParseURLPlayback(t *testing.T) {
+	cfg, err := parseURL("ezviz://a@b.com:p@api.hik-connect.com/SERIAL?channel=4&start=2026-06-05T19:00:00&end=2026-06-05T19:01:00&speed=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.isPlayback() {
+		t.Fatal("expected playback")
+	}
+	if cfg.start != "2026-06-05T19:00:00" || cfg.stop != "2026-06-05T19:01:00" {
+		t.Errorf("window = %q..%q", cfg.start, cfg.stop)
+	}
+	if cfg.speed != 2 {
+		t.Errorf("speed = %d", cfg.speed)
+	}
+	if busTypeFor(cfg) != 2 {
+		t.Errorf("busType = %d, want 2", busTypeFor(cfg))
+	}
+}
+
+func TestParseURLLiveIsNotPlayback(t *testing.T) {
+	cfg, err := parseURL("ezviz://a@b.com:p@api.hik-connect.com/SERIAL?channel=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.isPlayback() {
+		t.Error("live URL must not be playback")
+	}
+	if busTypeFor(cfg) != 1 {
+		t.Errorf("busType = %d, want 1", busTypeFor(cfg))
+	}
+}
+
+func TestParseURLEndRequiresStart(t *testing.T) {
+	if _, err := parseURL("ezviz://a@b.com:p@h/SERIAL?end=2026-06-05T19:01:00"); err == nil {
+		t.Fatal("end without start must error")
+	}
+}
+
+func TestParsePlaybackTime(t *testing.T) {
+	// Wall-clock is preserved verbatim — no timezone shift (the device interprets
+	// the window in its own local time).
+	cases := map[string]string{
+		"2026-06-05T19:00:00":  "2026-06-05T19:00:00",
+		"2026-06-05 19:00:00":  "2026-06-05T19:00:00",
+		"2026-06-05T19:00:00Z": "2026-06-05T19:00:00",
+	}
+	for in, want := range cases {
+		got, err := parsePlaybackTime(in)
+		if err != nil || got != want {
+			t.Errorf("parsePlaybackTime(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	if _, err := parsePlaybackTime("not-a-time"); err == nil {
+		t.Error("bad time must error")
+	}
+}
+
+// TestBuildPlayRequestBodyPlayback asserts a playback session emits busType=2,
+// the requested window, and the speed multiplier in the PLAY_REQUEST body.
+func TestBuildPlayRequestBodyPlayback(t *testing.T) {
+	sess, err := newSession(sessionConfig{
+		deviceSerial: "SERIAL", channelNo: 4, streamType: 1,
+		busType: 2, startTime: "2026-06-05T19:00:00", stopTime: "2026-06-05T19:01:00", speed: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.close()
+
+	attrs := decodeAttrs(sess.buildPlayRequestBody(), false)
+	if v, _ := GetIntAttr(attrs, AttrBusType); v != 2 {
+		t.Errorf("busType = %d, want 2", v)
+	}
+	if s, _ := GetStringAttr(attrs, AttrStartTime); s != "2026-06-05T19:00:00" {
+		t.Errorf("start = %q", s)
+	}
+	if s, _ := GetStringAttr(attrs, AttrStopTime); s != "2026-06-05T19:01:00" {
+		t.Errorf("stop = %q", s)
+	}
+	if v, ok := GetIntAttr(attrs, AttrSeekRate); !ok || v != 2 {
+		t.Errorf("seekRate = %d ok=%v, want 2", v, ok)
+	}
+}
+
+func TestBuildPlayRequestBodyLiveOmitsSeekRate(t *testing.T) {
+	sess, err := newSession(sessionConfig{deviceSerial: "SERIAL", channelNo: 1, streamType: 1, busType: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.close()
+
+	attrs := decodeAttrs(sess.buildPlayRequestBody(), false)
+	if _, ok := GetIntAttr(attrs, AttrSeekRate); ok {
+		t.Error("live must not send a seek rate")
+	}
+	if v, _ := GetIntAttr(attrs, AttrBusType); v != 1 {
+		t.Errorf("busType = %d, want 1", v)
+	}
+}
+
 // TestDialReachesTransport proves the data-plane wiring is reachable: NewProducer
 // → Dial → connect() runs login and fails on the network for an unreachable
 // host. It stays hermetic (no live cloud) by pointing at an invalid TLD that
